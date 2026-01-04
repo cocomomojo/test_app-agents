@@ -1,0 +1,81 @@
+name: Playwright Test Agents CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test-agents:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # Step 1: test_app をチェックアウト（参照用）
+      - name: Checkout test_app
+        uses: actions/checkout@v4
+        with:
+          repository: YOUR_ORG/test_app
+          path: test_app
+      
+      # Step 2: test_app-agents をチェックアウト
+      - name: Checkout test_app-agents
+        uses: actions/checkout@v4
+        with:
+          path: test_app-agents
+      
+      # Step 3: Node.js セットアップ
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: test_app-agents/package-lock.json
+      
+      # Step 4: test_app-agents の依存関係インストール
+      - name: Install dependencies
+        working-directory: test_app-agents
+        run: npm ci
+      
+      # Step 5: test_app の Docker Compose を起動
+      - name: Start test_app with Docker Compose
+        working-directory: test_app/infra
+        run: docker compose -f docker-compose.ci.yml up -d --build
+      
+      # Step 6: アプリ起動待機
+      - name: Wait for Application
+        run: |
+          timeout 120 bash -c 'until curl -f http://localhost:8080/actuator/health; do sleep 2; done'
+          timeout 120 bash -c 'until curl -f http://localhost:5173; do sleep 2; done'
+      
+      # Step 7: Seed Test 実行（test_app-agents から）
+      - name: Run Seed Test
+        working-directory: test_app-agents
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:5173
+        run: npx playwright test seed.spec.ts
+      
+      # Step 8-12: 以降の Agents 処理（Wiki16 と同じ）
+      - name: Initialize Playwright Agents
+        working-directory: test_app-agents
+        run: npx playwright init-agents --loop=vscode
+      
+      - name: Run Playwright Tests
+        working-directory: test_app-agents
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:5173
+        run: npx playwright test --reporter=line,allure-playwright
+        continue-on-error: true
+      
+      # Step 9: Allure レポート公開
+      - name: Deploy to GitHub Pages
+        if: github.ref == 'refs/heads/main' && always()
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./test_app-agents/allure-report
+      
+      # Step 10: Docker Compose 停止
+      - name: Stop Applications
+        if: always()
+        run: |
+          docker compose -f test_app/infra/docker-compose.ci.yml down -v
