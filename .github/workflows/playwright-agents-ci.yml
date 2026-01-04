@@ -4,17 +4,48 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      test-granularity:
+        description: 'テスト粒度: basic / standard / comprehensive'
+        required: false
+        default: 'standard'
+        type: choice
+        options:
+          - basic
+          - standard
+          - comprehensive
+      app-repo-url:
+        description: 'テスト対象アプリのリポジトリURL（未指定時は cocomomojo/test_app）'
+        required: false
+        type: string
+      manual-url:
+        description: 'マニュアルファイルのURL（Markdown形式想定）'
+        required: false
+        type: string
+      include-diff-only:
+        description: '差分ベースのインプットを使用（2回目以降推奨）'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 jobs:
   test-agents:
     runs-on: ubuntu-latest
     
+    env:
+      TEST_GRANULARITY: ${{ github.event.inputs.test-granularity || 'standard' }}
+      APP_REPO_URL: ${{ github.event.inputs.app-repo-url || 'cocomomojo/test_app' }}
+      MANUAL_URL: ${{ github.event.inputs.manual-url }}
+      INCLUDE_DIFF_ONLY: ${{ github.event.inputs.include-diff-only || 'false' }}
     steps:
       # Step 1: test_app をチェックアウト（参照用）
       - name: Checkout test_app
         uses: actions/checkout@v4
         with:
-          repository: cocomomojo/test_app
+          repository: ${{ env.APP_REPO_URL }}
           path: test_app
       
       # Step 2: test_app-agents をチェックアウト
@@ -47,6 +78,25 @@ jobs:
           timeout 120 bash -c 'until curl -f http://localhost:8080/actuator/health; do sleep 2; done'
           timeout 120 bash -c 'until curl -f http://localhost:5173; do sleep 2; done'
       
+      # Step 6.5: マニュアル・差分の取得
+      - name: Fetch Manual
+        if: env.MANUAL_URL != ''
+        working-directory: test_app-agents
+        run: |
+          curl -o specs/manual.md "${{ env.MANUAL_URL }}"
+          echo "✅ Manual fetched: specs/manual.md"
+      
+      - name: Detect Changes (Diff-based)
+        if: env.INCLUDE_DIFF_ONLY == 'true'
+        working-directory: test_app-agents
+        run: |
+          LAST_COMMIT=$(cat .test-state 2>/dev/null || echo "HEAD~1")
+          git diff $LAST_COMMIT HEAD --stat > specs/changes-summary.md || true
+          echo "## Changed Files" >> specs/changes-summary.md
+          git diff $LAST_COMMIT HEAD --name-only >> specs/changes-summary.md || true
+          echo "## Affected Tests" >> specs/changes-summary.md
+          echo "Previous implementation: see specs/test-plan-v*.md" >> specs/changes-summary.md
+          echo "✅ Change detection done"
       # Step 7: Seed Test 実行（test_app-agents から）
       - name: Run Seed Test
         working-directory: test_app-agents
@@ -63,33 +113,56 @@ jobs:
         working-directory: test_app-agents
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:5173
-        run: npx playwright test --reporter=line,allure-playwright
+          TEST_GRANULARITY: ${{ env.TEST_GRANULARITY }}
+          INCLUDE_DIFF_ONLY: ${{ env.INCLUDE_DIFF_ONLY }}
+        run: |
+          echo "🎨 Test Granularity: ${{ env.TEST_GRANULARITY }}"
+          echo "📋 Diff-only Mode: ${{ env.INCLUDE_DIFF_ONLY }}"
+          npx playwright test --reporter=line,allure-playwright
         continue-on-error: true
       
       # Step 9: Allure レポート公開
       - name: Install Allure CLI
-        if: success()
+        if: always()
         run: npm install -g allure-commandline
 
       - name: Generate Allure report
-        if: success()
-        working-directory: frontend
+        if: always()
+        working-directory: test_app-agents
         run: |
-          npx allure generate allure-results --clean -o allure-report
+          if [ -d allure-results ]; then
+            npx allure generate allure-results --clean -o allure-report
+            echo "✅ Allure report generated"
+          else
+            echo "⚠️ allure-results not found, skipping report generation"
+          fi
 
       - name: Upload Allure report as artifact
-        if: success()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: allure-report
-          path: frontend/allure-report
+          path: test_app-agents/allure-report
+          if-no-files-found: ignore
 
       - name: Deploy Allure report to GitHub Pages
-        if: success() && github.ref == 'refs/heads/main'
+        if: always() && github.ref == 'refs/heads/main'
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./test_app-agents/allure-report
+      
+      # Step 10: テスト実行状態を記録（差分ベース用）
+      - name: Store Test Execution State
+        if: always()
+        working-directory: test_app-agents
+        run: |
+          git rev-parse HEAD > .test-state
+          git add .test-state
+          git config user.name "CI"
+          git config user.email "ci@example.com"
+          git commit -m "test: Update test execution state" || true
+          git push || true
       
       # Step 10: Docker Compose 停止
       - name: Stop Applications
