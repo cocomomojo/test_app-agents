@@ -86,11 +86,11 @@ flowchart TD
 
     A --> B --> C --> D --> E --> F --> G
     
-    style A fill:#90EE90
-    style C fill:#FFD700
-    style D fill:#87CEEB
-    style E fill:#DDA0DD
-    style G fill:#FF6347
+    style A fill:#90EE90,color:#000
+    style C fill:#FFD700,color:#000
+    style D fill:#87CEEB,color:#000
+    style E fill:#DDA0DD,color:#000
+    style G fill:#FF6347,color:#000
 ```
 
 #### 【2回目以降】差分ベース実行フロー図
@@ -109,13 +109,13 @@ flowchart TD
 
     A --> B --> C --> D --> E --> F --> G --> H --> I
     
-    style A fill:#90EE90
-    style C fill:#FFA500
-    style D fill:#FFD700
-    style E fill:#87CEEB
-    style F fill:#DDA0DD
-    style G fill:#FFB6C1
-    style I fill:#FF6347
+    style A fill:#90EE90,color:#000
+    style C fill:#FFA500,color:#000
+    style D fill:#FFD700,color:#000
+    style E fill:#87CEEB,color:#000
+    style F fill:#DDA0DD,color:#000
+    style G fill:#FFB6C1,color:#000
+    style I fill:#FF6347,color:#000
 ```
 
 ### 📊 品質維持のポイント
